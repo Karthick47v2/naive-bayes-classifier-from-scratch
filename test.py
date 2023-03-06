@@ -1,8 +1,263 @@
-from sklearn.metrics import accuracy_score, precision_score, recall_score
 import numpy as np
 import pandas as pd
+import random
+
 import docx
-import io
+
+from collections import defaultdict
+
+
+def confusion_matrix(y_true, y_pred):
+    """
+    Computes the confusion matrix.
+
+    Parameters:
+    y_true (array-like): The true labels.
+    y_pred (array-like): The predicted labels.
+
+    Returns:
+    array-like: 2D array of TP, FP, TN, FN
+    """
+    # Find unique labels in y_true
+    labels = y_true.unique().tolist()
+
+    # Initialize a matrix of zeros
+    cm = [[0 for _ in range(len(labels))] for _ in range(len(labels))]
+
+    # Fill in the matrix by counting occurrences of each label pair
+    for i in range(len(y_true)):
+        true_index = labels.index(y_true[i])
+        pred_index = labels.index(y_pred[i])
+        cm[true_index][pred_index] += 1
+
+    return labels, cm
+
+
+def accuracy_score(y_true, y_pred):
+    """
+    Computes the accuracy score.
+    Parameters:
+    y_true (array-like): The true labels.
+    y_pred (array-like): The predicted labels.
+
+    Returns:
+    float: The accuracy score.
+    """
+    if len(y_true) != len(y_pred):
+        raise ValueError("y_true and y_pred must have the same length")
+
+    # Compute the number of correctly classified samples
+    n_correct = np.sum(y_true == y_pred)
+
+    # Compute the accuracy score
+    accuracy = n_correct / len(y_true)
+
+    return accuracy
+
+
+def precision_score(y_true, y_pred, average):
+    """
+    Computes the precision score.
+
+    Parameters:
+    y_true (array-like): The true labels.
+    y_pred (array-like): The predicted labels.
+    average (str): The type of averaging to perform. Possible values are
+        'binary', 'micro', 'macro', 'weighted', and 'samples'.
+
+    Returns:
+    float: The precision score.
+    """
+    if len(y_true) != len(y_pred):
+        raise ValueError("y_true and y_pred must have the same length")
+
+    if average not in ('binary', 'micro', 'macro', 'weighted', 'samples'):
+        raise ValueError(
+            "average must be one of 'binary', 'micro', 'macro', 'weighted', or 'samples'")
+
+    # Compute the confusion matrix
+    _, conf_mat = confusion_matrix(y_true, y_pred)
+
+    # Compute the precision scores for each class
+    tp = np.diag(conf_mat)
+    fp = np.sum(conf_mat, axis=0) - tp
+    precision = tp / (tp + fp)
+
+    # Compute the average precision score
+    if average == 'binary':
+        precision = precision[1]
+    elif average == 'micro':
+        precision = np.sum(tp) / np.sum(tp + fp)
+    elif average == 'macro':
+        precision = np.mean(precision)
+    elif average == 'weighted':
+        weights = np.sum(conf_mat, axis=1)
+        precision = np.average(precision, weights=weights)
+    elif average == 'samples':
+        precision = precision.mean()
+
+    return precision
+
+
+def recall_score(y_true, y_pred, average='binary'):
+    """
+    Computes the recall score.
+
+    Parameters:
+    y_true (array-like): The true labels.
+    y_pred (array-like): The predicted labels.
+    average (str): The type of averaging to perform. Possible values are
+        'binary', 'micro', 'macro', 'weighted', and 'samples'.
+
+    Returns:
+    float: The recall score.
+    """
+    if len(y_true) != len(y_pred):
+        raise ValueError("y_true and y_pred must have the same length")
+
+    if average not in ('binary', 'micro', 'macro', 'weighted', 'samples'):
+        raise ValueError(
+            "average must be one of 'binary', 'micro', 'macro', 'weighted', or 'samples'")
+
+    # Compute the confusion matrix
+    _, conf_mat = confusion_matrix(y_true, y_pred)
+
+    # Compute the recall scores for each class
+    tp = np.diag(conf_mat)
+    fn = np.sum(conf_mat, axis=1) - tp
+    recall = tp / (tp + fn)
+
+    # Compute the average recall score
+    if average == 'binary':
+        recall = recall[1]
+    elif average == 'micro':
+        recall = np.sum(tp) / np.sum(tp + fn)
+    elif average == 'macro':
+        recall = np.mean(recall)
+    elif average == 'weighted':
+        weights = np.sum(conf_mat, axis=1)
+        recall = np.average(recall, weights=weights)
+    elif average == 'samples':
+        recall = recall.mean()
+
+    return recall
+
+
+def cv(k, data_split):
+    """Perform Cross Validation
+
+    Args:
+        k (int): Number of folds
+        data_split (list): List of folds
+
+    Returns:
+        NaiveBayes: Model with best accuracy of cross validations.
+    """
+
+    results = []
+    best_model = None
+
+    for i in range(k):
+        cv = []
+        for j in range(k):
+            if j != i:
+                cv += data_split[j]
+
+        temp_df = pd.DataFrame(cv)
+
+        x = temp_df.drop([temp_df.columns[-1]], axis=1)
+        y = temp_df[temp_df.columns[-1]]
+
+        test_df = pd.DataFrame(data_split[i])
+
+        model = NaiveBayes()
+        model.fit(x, y)
+        y_pred = model.predict(test_df.drop([test_df.columns[-1]], axis=1))
+
+        results.append(accuracy_score(test_df[test_df.columns[-1]], y_pred))
+        print("\nK = {} Accuracy: {}".format(
+            i+1, results[-1]))
+
+        if not best_model:
+            best_model = (model, results[0])
+        else:
+            if best_model[1] > results[-1]:
+                best_model = (model, results[-1])
+
+    print("\nAverage Accuracy: {}".format(sum(results)/k))
+    return best_model[0]
+
+
+def stratified_k_fold_cross_validation(df, k):
+    """
+    Perform stratified k-fold cross-validation on a given dataset.
+
+    Parameters:
+        X (array-like): The feature data.
+        y (array-like): Label data.
+        k (int): Number of folds.
+        model (object): Model object.
+
+    Returns:
+        NaiveBayes: Model with best accuracy of cross validations.
+    """
+
+    df_copy = df.copy()
+
+    # dict to hold data by class label
+    data_by_label = defaultdict(list)
+    for idx, row in df_copy.iterrows():
+        data_by_label[df_copy.columns[-1]].append(df_copy.iloc[idx])
+
+    # shuffle data for each label
+    for label in data_by_label.keys():
+        random.shuffle(data_by_label[label])
+
+    data_split = [[] for _ in range(k)]
+
+    # add data to each fold
+    for label, data in data_by_label.items():
+        # calculate number of data in a fold
+        fold_size = len(data) // k
+        for i in range(k):
+            start_idx = i * fold_size
+            end_idx = (i + 1) * fold_size
+            if i == k-1:
+                end_idx = len(data)
+            data_split[i] += data[start_idx:end_idx]
+
+    return cv(k, data_split)
+
+
+def k_fold_cross_validation(df, k):
+    """
+    Perform k-fold cross-validation on a given dataset.
+
+    Parameters:
+        X (array-like): The feature data.
+        y (array-like): Label data.
+        k (int): Number of folds.
+        model (object): Model object.
+
+    Returns:
+        NaiveBayes: Model with best accuracy of cross validations.
+    """
+
+    df_copy = df.copy()
+
+    # calculate number of data in a fold
+    fold_size = df_copy.shape[0] // k
+
+    data_split = [[] for _ in range(k)]
+
+    # add data to each fold
+    for i in range(k):
+        while len(data_split[i]) < fold_size:
+            idx = df_copy.index[random.randrange(df_copy.shape[0])]
+            data_split[i].append(df_copy.loc[idx].values.tolist())
+            df_copy.drop(idx, inplace=True)
+
+    return cv(k, data_split)
 
 
 class NaiveBayes:
@@ -122,11 +377,23 @@ class NaiveBayes:
         return np.array(results)
 
 
+# def read_file(f_name):
+#     """Read data from txt file
+
+#     Args:
+#         f_name (str): txt file name
+
+#     Returns:
+#         pandas.DataFrame: Loaded dataset
+#     """
+#     df = pd.read_csv(f_name, delimiter=',', header=None)
+#     return df
+
 def read_file(f_name):
     """
     Read and parse file from *.Docx extension
 
-    Args:
+    Parameters:
         f_name (str): The file name
 
     Returns:
@@ -152,20 +419,20 @@ while True:
     try:
         usr_in = None
         while True:
-            print(
-                '--------------------------------------------------------------------------------')
             usr_in = input(
-                '1. Train Classifier\n2. Test Classifier\n3. Exit\nSelect option: ')
+                '\nEnter 1 to train\nEnter 2 to classify\nEnter 3 to test accuracy\nEnter 4 to k-Fold cv\nEnter 5 to stratified k-Fold cv\nEnter 6 to exit\n')
 
-            if usr_in != '1' and usr_in != '2' and usr_in != '3':
-                print("Press 1 or 2")
+            print(f'You entered: {usr_in}')
+
+            if usr_in < '1' or usr_in > '6':
+                print("Press appropiate number")
 
             else:
                 break
 
         if usr_in == '1':
-            f_name = input("\nEnter file name of training data: ")
-            meta_name = input("\nEnter file name of meta data: ")
+            meta_name = input("\nEnter meta filename: ")
+            f_name = input("\nEnter training filename: ")
 
             df = read_file(f_name)
 
@@ -174,31 +441,58 @@ while True:
 
             nb_clf = NaiveBayes()
             nb_clf.fit(x, y)
-
             print('\nModel trained on data...\n')
 
         elif usr_in == '2':
-            f_name = input("\nEnter file name of test data: ")
+            data = input(
+                "Enter data separated by commas in the order which is given in the other files: ")
+
+            # Split the data by commas and store it in a list
+            data_list = data.split(",")
+            column_list = nb_clf.attributes
+            # Create a dataframe from the data and column lists
+            df = pd.DataFrame(data=list([data_list]), columns=column_list)
+            print("The prediction for the input is: "+nb_clf.predict(df)[0])
+
+        elif usr_in == '3':
+            f_name = input("\nEnter testing filename: ")
             df = read_file(f_name)
 
             x = df.drop([df.columns[-1]], axis=1)
             y = df[df.columns[-1]]
 
-            f_name = input('\nEnter output file name: ')
-
             y_pred = nb_clf.predict(x)
 
-            df['class'] = y_pred
-
-            x.to_csv(f_name, header=False, index=False)
-
             print("\nAccuracy: {}".format(accuracy_score(y, y_pred)))
-            print("Precision: {}".format(precision_score(
-                y, y_pred, average='weighted')))
-            print("Recall: {}\n".format(
+            print("Precision: {}".format(precision_score(y, y_pred, 'weighted')))
+            print("Recall: {}".format(
                 recall_score(y, y_pred, average='weighted')))
+            print("Confusion Matrix: \n")
+            labels, cm = confusion_matrix(y, y_pred)
+
+            print("{:<8}".format(''), *
+                  ["{:<8}".format(label) for label in labels])
+
+            for i in range(len(labels)):
+                print("{:<8}".format(labels[i]), *
+                      ["{:<8}".format(val) for val in cm[i]])
+
+            print()
+
+        elif usr_in == '4' or usr_in == '5':
+            meta_name = input("\nEnter meta filename: ")
+            f_name = input("\nEnter training filename: ")
+            k = int(input("\nEnter value for K: "))
+
+            if k < 2:
+                raise ValueError("K should be greater than one.")
+
+            df = read_file(f_name)
+            nb_clf = k_fold_cross_validation(
+                df, k) if usr_in == '4' else stratified_k_fold_cross_validation(df, k)
 
         else:
+            print('Terminated program')
             break
 
     except(FileNotFoundError):
